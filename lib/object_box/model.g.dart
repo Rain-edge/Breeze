@@ -483,6 +483,7 @@ UnifiedComicDownload _$UnifiedComicDownloadFromJson(
   downloadedAt: DateTime.parse(json['downloadedAt'] as String),
   deleted: json['deleted'] as bool,
   schemaVersion: (json['schemaVersion'] as num).toInt(),
+  displayOrder: (json['displayOrder'] as num?)?.toInt() ?? 0,
 );
 
 Map<String, dynamic> _$UnifiedComicDownloadToJson(
@@ -515,6 +516,7 @@ Map<String, dynamic> _$UnifiedComicDownloadToJson(
   'downloadedAt': instance.downloadedAt.toIso8601String(),
   'deleted': instance.deleted,
   'schemaVersion': instance.schemaVersion,
+  'displayOrder': instance.displayOrder,
 };
 
 FavoriteFolder _$FavoriteFolderFromJson(Map<String, dynamic> json) =>

@@ -26,10 +26,12 @@ class LocalShelfPage extends StatefulWidget {
     super.key,
     required this.mode,
     required this.refreshSignal,
+    this.reorderMode = false,
   });
 
   final ShelfPageMode mode;
   final int refreshSignal;
+  final bool reorderMode;
 
   @override
   State<LocalShelfPage> createState() => _LocalShelfPageState();
@@ -380,35 +382,38 @@ class _LocalShelfPageState extends State<LocalShelfPage>
     final entries = mapToUnifiedComicSimplifyEntryInfoList(comics);
     return Stack(
       children: [
-        RefreshIndicator(
-          onRefresh: () async => _dispatch(),
-          child: PluginComicGridSliver(
-            controller: _scrollController,
-            physics: const AlwaysScrollableScrollPhysics(),
-            entries: entries,
-            type: type,
-            refresh: _dispatch,
-            onDeleteSuccess: _handleItemDeleted,
-            hasReachedMax: hasReachedMax,
-            isLoadingMore: isLoadingMore,
-            loadMoreFailed: loadMoreFailed,
-            onRetryLoadMore: () => _dispatch(append: true),
-            onLoadMore: () => _dispatch(append: true),
-            selectionMode: _selectionMode,
-            isEntrySelected: (entry) =>
-                _selectedKeys.contains(_entryKey(entry)),
-            onEntryLongPress: (entry) {
-              if (!_selectionMode) {
-                _enterSelectionModeWith(entry);
-                return;
-              }
-              _toggleSelection(entry);
-            },
-            onEntryTap: _selectionMode
-                ? (entry) => _toggleSelection(entry)
-                : null,
+        if (widget.reorderMode && widget.mode == ShelfPageMode.download)
+          _buildReorderableList(entries, type)
+        else
+          RefreshIndicator(
+            onRefresh: () async => _dispatch(),
+            child: PluginComicGridSliver(
+              controller: _scrollController,
+              physics: const AlwaysScrollableScrollPhysics(),
+              entries: entries,
+              type: type,
+              refresh: _dispatch,
+              onDeleteSuccess: _handleItemDeleted,
+              hasReachedMax: hasReachedMax,
+              isLoadingMore: isLoadingMore,
+              loadMoreFailed: loadMoreFailed,
+              onRetryLoadMore: () => _dispatch(append: true),
+              onLoadMore: () => _dispatch(append: true),
+              selectionMode: _selectionMode,
+              isEntrySelected: (entry) =>
+                  _selectedKeys.contains(_entryKey(entry)),
+              onEntryLongPress: (entry) {
+                if (!_selectionMode) {
+                  _enterSelectionModeWith(entry);
+                  return;
+                }
+                _toggleSelection(entry);
+              },
+              onEntryTap: _selectionMode
+                  ? (entry) => _toggleSelection(entry)
+                  : null,
+            ),
           ),
-        ),
         Positioned(
           bottom: 8,
           left: 8,
@@ -478,6 +483,48 @@ class _LocalShelfPageState extends State<LocalShelfPage>
           ),
         ),
       ],
+    );
+  }
+
+  Widget _buildReorderableList(
+    List<ComicSimplifyEntryInfo> entries,
+    ComicEntryType type,
+  ) {
+    return ReorderableListView.builder(
+      padding: const EdgeInsets.all(10),
+      itemCount: entries.length,
+      buildDefaultDragHandles: true,
+      proxyDecorator: (child, index, animation) {
+        return Material(
+          elevation: 4,
+          borderRadius: BorderRadius.circular(8),
+          child: child,
+        );
+      },
+      itemBuilder: (context, index) {
+        final entry = entries[index];
+        return Padding(
+          key: ValueKey(entry.id),
+          padding: const EdgeInsets.symmetric(vertical: 6),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 200),
+            child: ComicSimplifyEntry(
+              info: entry,
+              type: type,
+              refresh: _dispatch,
+              onDeleteSuccess: _handleItemDeleted,
+              onTapOverride: null,
+              onLongPressOverride: null,
+            ),
+          ),
+        );
+      },
+      onReorder: (oldIndex, newIndex) {
+        _bloc.add(BookshelfItemsReordered(
+          oldIndex: oldIndex,
+          newIndex: newIndex,
+        ));
+      },
     );
   }
 

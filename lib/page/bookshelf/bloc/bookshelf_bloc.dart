@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'package:bloc/bloc.dart';
 import 'package:bloc_concurrency/bloc_concurrency.dart';
 import 'package:equatable/equatable.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:worker_manager/worker_manager.dart';
 import 'package:zephyr/main.dart';
 import 'package:zephyr/object_box/model.dart';
@@ -14,6 +15,7 @@ import 'package:zephyr/page/bookshelf/service/favorite_folder_service.dart';
 import 'package:zephyr/util/error_filter.dart';
 
 const _kPageSize = 200;
+const _kDownloadOrderKey = 'download_display_order';
 
 enum BookshelfLoadStatus { initial, success, failure }
 
@@ -102,15 +104,53 @@ class BookshelfItemRemoved extends BookshelfSectionEvent {
   List<Object> get props => [uniqueKey];
 }
 
+class BookshelfItemsReordered extends BookshelfSectionEvent {
+  const BookshelfItemsReordered({required this.oldIndex, required this.newIndex});
+
+  final int oldIndex;
+  final int newIndex;
+
+  @override
+  List<Object> get props => [oldIndex, newIndex];
+}
+
 class BookshelfSectionBloc
     extends Bloc<BookshelfSectionEvent, BookshelfSectionState> {
   BookshelfSectionBloc({required this.mode})
     : super(const BookshelfSectionState()) {
     on<BookshelfLoadRequested>(_onLoadRequested, transformer: sequential());
     on<BookshelfItemRemoved>(_onItemRemoved);
+    on<BookshelfItemsReordered>(_onItemsReordered);
   }
 
   final ShelfPageMode mode;
+
+  Map<String, int>? _cachedDisplayOrder;
+
+  Future<Map<String, int>> _getDisplayOrder() async {
+    if (_cachedDisplayOrder != null) return _cachedDisplayOrder!;
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_kDownloadOrderKey);
+    if (raw == null || raw.isEmpty) {
+      _cachedDisplayOrder = <String, int>{};
+      return _cachedDisplayOrder!;
+    }
+    try {
+      final map = jsonDecode(raw) as Map<String, dynamic>;
+      _cachedDisplayOrder = map.map(
+        (k, v) => MapEntry(k, (v as num).toInt()),
+      );
+    } catch (_) {
+      _cachedDisplayOrder = <String, int>{};
+    }
+    return _cachedDisplayOrder!;
+  }
+
+  Future<void> _saveDisplayOrder(Map<String, int> order) async {
+    _cachedDisplayOrder = order;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_kDownloadOrderKey, jsonEncode(order));
+  }
 
   Future<void> _onLoadRequested(
     BookshelfLoadRequested event,
@@ -178,13 +218,47 @@ class BookshelfSectionBloc
       }
 
       final pageItems = _decodeItems(response['items']);
+
+      if (mode == ShelfPageMode.download && pageItems.isNotEmpty) {
+        final orderMap = await _getDisplayOrder();
+        var maxOrder = orderMap.values.fold<int>(
+          0,
+          (prev, v) => v > prev ? v : prev,
+        );
+        var needsSave = false;
+        for (final item in pageItems) {
+          if (item is! UnifiedComicDownload) continue;
+          final storedOrder = orderMap[item.uniqueKey];
+          if (storedOrder != null) {
+            item.displayOrder = storedOrder;
+          } else {
+            item.displayOrder = ++maxOrder;
+            orderMap[item.uniqueKey] = item.displayOrder;
+            needsSave = true;
+          }
+        }
+        (pageItems as List<UnifiedComicDownload>).sort(
+          (a, b) => a.displayOrder.compareTo(b.displayOrder),
+        );
+        if (needsSave) await _saveDisplayOrder(orderMap);
+      }
+
       final total = raw.total;
       final hasReachedMax = (offset + raw.items.length) >= total;
+
+      final comics = event.append
+          ? [...current.comics, ...pageItems]
+          : pageItems;
+      if (mode == ShelfPageMode.download &&
+          event.append &&
+          comics is List<UnifiedComicDownload>) {
+        comics.sort((a, b) => a.displayOrder.compareTo(b.displayOrder));
+      }
 
       emit(
         current.copyWith(
           status: BookshelfLoadStatus.success,
-          comics: event.append ? [...current.comics, ...pageItems] : pageItems,
+          comics: comics,
           total: total,
           hasReachedMax: hasReachedMax,
           isLoadingMore: false,
@@ -211,10 +285,10 @@ class BookshelfSectionBloc
     }
   }
 
-  void _onItemRemoved(
+  Future<void> _onItemRemoved(
     BookshelfItemRemoved event,
     Emitter<BookshelfSectionState> emit,
-  ) {
+  ) async {
     final current = state;
     if (current.status != BookshelfLoadStatus.success) {
       return;
@@ -225,6 +299,12 @@ class BookshelfSectionBloc
         .toList();
     if (nextComics.length == current.comics.length) {
       return;
+    }
+
+    if (mode == ShelfPageMode.download) {
+      final orderMap = await _getDisplayOrder();
+      orderMap.remove(event.uniqueKey);
+      await _saveDisplayOrder(orderMap);
     }
 
     final removedCount = current.comics.length - nextComics.length;
@@ -329,10 +409,7 @@ class BookshelfSectionBloc
   _RawQueryResult _queryDownloadRaw(SearchEnter search, int offset, int limit) {
     final query = objectbox.unifiedDownloadBox
         .query(_downloadBaseCondition(search))
-        .order(
-          UnifiedComicDownload_.downloadedAt,
-          flags: search.sort == 'da' ? 0 : Order.descending,
-        )
+        .order(UnifiedComicDownload_.downloadedAt, flags: Order.descending)
         .build();
     try {
       final total = query.count();
@@ -346,6 +423,43 @@ class BookshelfSectionBloc
     } finally {
       query.close();
     }
+  }
+
+  void _onItemsReordered(
+    BookshelfItemsReordered event,
+    Emitter<BookshelfSectionState> emit,
+  ) async {
+    if (mode != ShelfPageMode.download ||
+        state.status != BookshelfLoadStatus.success) {
+      return;
+    }
+
+    final currentComics = List<UnifiedComicDownload>.from(state.comics);
+    final oldIndex = event.oldIndex;
+    final newIndex = event.newIndex;
+
+    if (oldIndex < 0 ||
+        oldIndex >= currentComics.length ||
+        newIndex < 0 ||
+        newIndex > currentComics.length) {
+      return;
+    }
+
+    final item = currentComics.removeAt(oldIndex);
+    currentComics.insert(newIndex, item);
+
+    // Update displayOrder for all items
+    final orderMap = <String, int>{};
+    for (int i = 0; i < currentComics.length; i++) {
+      currentComics[i].displayOrder = i + 1;
+      orderMap[currentComics[i].uniqueKey] = i + 1;
+    }
+
+    // Persist order to shared_preferences
+    await _saveDisplayOrder(orderMap);
+
+    // Emit new state
+    emit(state.copyWith(comics: currentComics));
   }
 
   Condition<UnifiedComicFavorite> _favoriteBaseCondition(SearchEnter search) {

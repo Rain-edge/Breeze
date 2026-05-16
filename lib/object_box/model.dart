@@ -599,6 +599,7 @@ class UnifiedComicDownload {
   DateTime downloadedAt;
   bool deleted;
   int schemaVersion;
+  int displayOrder;
 
   UnifiedComicDownload({
     this.id = 0,
@@ -628,6 +629,7 @@ class UnifiedComicDownload {
     required this.downloadedAt,
     required this.deleted,
     required this.schemaVersion,
+    this.displayOrder = 0,
   });
 
   Map<String, dynamic> toJson() => _$UnifiedComicDownloadToJson(this);
