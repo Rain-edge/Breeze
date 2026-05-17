@@ -42,6 +42,7 @@ class _BookshelfPageContentState extends State<_BookshelfPageContent>
   final List<int> _refreshSignals = [0, 0, 0];
   List<String> _lastAvailableSources = const <String>[];
   bool _isSearchExpanded = false;
+  bool _isReorderMode = false;
 
   @override
   void initState() {
@@ -77,6 +78,19 @@ class _BookshelfPageContentState extends State<_BookshelfPageContent>
         appBar: AppBar(
           titleSpacing: isDesktop ? 16 : 8,
           title: isDesktop ? _buildDesktopHeader() : _buildMobileHeader(),
+          actions: _currentMode() == ShelfPageMode.download
+              ? [
+                  IconButton(
+                    tooltip: _isReorderMode ? '完成排序' : '排序',
+                    icon: Icon(_isReorderMode ? Icons.done : Icons.drag_handle),
+                    onPressed: () {
+                      setState(() {
+                        _isReorderMode = !_isReorderMode;
+                      });
+                    },
+                  ),
+                ]
+              : null,
         ),
         body: TabBarView(
           controller: _tabController,
@@ -92,6 +106,7 @@ class _BookshelfPageContentState extends State<_BookshelfPageContent>
             LocalShelfPage(
               mode: ShelfPageMode.download,
               refreshSignal: _refreshSignals[2],
+              reorderMode: _isReorderMode,
             ),
           ],
         ),
@@ -271,6 +286,7 @@ class _BookshelfPageContentState extends State<_BookshelfPageContent>
     }
     setState(() {
       _currentIndex = _tabController.index;
+      _isReorderMode = false;
       _syncSearchFieldWithCurrentMode();
     });
   }
