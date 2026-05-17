@@ -48,6 +48,7 @@ ComicSyncRemoteAdapter? createSyncAdapter(GlobalSettingState state) {
     case SyncServiceType.s3:
       return S3SyncService(state);
   }
+  return null;
 }
 
 Future<void> autoSync(
