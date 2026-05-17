@@ -250,8 +250,7 @@ class BookshelfSectionBloc
           ? [...current.comics, ...pageItems]
           : pageItems;
       if (mode == ShelfPageMode.download &&
-          event.append &&
-          comics is List<UnifiedComicDownload>) {
+          event.append) {
         comics.sort((a, b) => a.displayOrder.compareTo(b.displayOrder));
       }
 
